@@ -1,0 +1,26 @@
+;=============================================================================
+
+CLEAR       ; zero all variables
+
+INCLUDE "ProcessorConfiguration.pbp"
+
+goto init   ; skip over interrupt service routine, functions, other included code
+
+;????INCLUDE "Interrupt.pbp"
+
+;=============================================================================
+init:
+
+;=============================================================================
+
+;????gosub enable_interrupts
+
+mainloop:
+    Goto mainloop
+
+;=============================================================================
+
+    End
+
+
+
