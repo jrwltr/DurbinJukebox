@@ -192,18 +192,15 @@ REG7_PPLD   var byte ;Ram mirror for data written to Reg 7
     R7_DRUM_DOWN    con $80
 
 ;=============================================================================
-SPI_TX_LO   var byte ;Ram mirror for data written to Reg 8
     ;* Register 8 - SPI TX_LO, write only, low byte of 24-bit
     ;*     transfer to the EEPROM, don't care for DAC
 
 ;=============================================================================
-SPI_TX_MID  var byte ;Ram mirror for data written to Reg 9
     ;* Register 9 - SPI TX_MID, write only, middle byte of 24-bit
     ;*     transfer to the EEPROM or DAC, this is the high data byte
     ;*     for the EEPROM and the only data byte for the DAC
 
 ;=============================================================================
-SPI_TX_HI   var byte ;Ram mirror for data written to Reg 10
     ;* Register 10 - SPI TX_HI, write only, high byte of 24-bit
     ;*     transfer to the EEPROM or DAC, this is the command
     ;*     byte for the EEPROM and the DAC
@@ -212,17 +209,14 @@ SPI_TX_HI   var byte ;Ram mirror for data written to Reg 10
     ;*     The command for reading address 32 would be 10110010 (B2)
 
 ;=============================================================================
-SPI_RX_LO   var byte ;storage for data read from Reg 11
     ;* Register 11 - SPI RX_LO, read only, low byte of 16-bit
     ;*     transfer from the EEPROM
 
 ;=============================================================================
-SPI_RX_HI   var byte ;storage for data read from Reg 12
     ;* Register 12 - SPI RX_HI, read only, high byte of 16-bit
     ;*     transfer from the EEPROM
 
 ;=============================================================================
-; SPI Reg 13 has no storage, it is only one bit each way
     ;* Register 13 - SPI CNTL, read/write, Control and Status for
     ;*     the SPI transfer (Reads as 80h after reset)
     ;*     Bit 0 is TRANSFER, writing '1' to this bit starts an SPI transfer.
@@ -231,9 +225,6 @@ SPI_RX_HI   var byte ;storage for data read from Reg 12
     ;*     Bits 0 to 6 all read as '0'.
 
 ;=============================================================================
-temp1               var byte ;general storage 1
-temp2               var byte ;general storage 2
-temp4               var byte ;general storage 4
 register_address    var byte ;address of register to be accessed
 register_data       var byte ;data written to or read from a register
 drum_offset         var byte ;menu drum position offset
@@ -241,18 +232,21 @@ motor_offset        var byte ;motor position offset ;motor offset for upward dru
 program_switch      var bit  ;set non-zero when program switch is enabled
 drum_dir_up         var bit  ;set non-zero when drum last moved up, zero when last down
 drum_moving         var bit  ;set non-zero when drum is moving
-dadac               var byte ;used to store data sent to DAC
+dac_value           var byte ;used to store data sent to DAC
+    DAC_MOTOR_STOP  con $ff
+    DAC_MOTOR_SLOW  con $c0
+    DAC_MOTOR_FAST  con $60
 drum_position       var byte ;current drum position,0=rows 1&2, 1=rows 3&4,.., 4=rows 9&0
 selection_switch    var byte ;current selection switch flag, 0=rows 1&2, .., 4=rows 9&0
-spi_bit_count       var byte ;loop count value for SPI transfer completions
 
 ;=============================================================================
     PORTB = RD_WR_L
 
     ;set interrupt mask register
-    gosub read_selector_and_program_switches       ;read register 2
-    REG3_IM = ~REG2_SPSW
-    gosub write_interrupt_mask       ;write complemented reg 2 value to reg 3
+    gosub read_selector_and_program_switches
+    register_address = 3
+    register_data = ~REG2_SPSW
+    gosub write_register
 
     ;set selector lights OFF, EE_SHORT to 25-bit and select EEPROM
     REG4_EESL = R4_EE_SELECT
@@ -263,14 +257,13 @@ spi_bit_count       var byte ;loop count value for SPI transfer completions
     REG7_PPLD = R7_PROGRAM_LED
     gosub write_pricing_lights
 
-    ;also send FFh to DAC to set its level to zero
-    dadac = $FF      ;this stops the motor
+    ;send FFh to DAC to set its level to zero
+    dac_value = DAC_MOTOR_STOP
     gosub write_dac
-    ;SPI interface is already stable
 
-    ;leave all 4 pricing lights on for the duration
-    REG7_PPLD = (REG7_PPLD & ~R7_PROGRAM_LED) + R7_ALL_LIGHTS  ;turn on pricing lights and program LED
-    gosub write_pricing_lights       ;write pricing lights, program LED
+    ;turn on pricing lights and program LED
+    REG7_PPLD = (REG7_PPLD & ~R7_PROGRAM_LED) + R7_ALL_LIGHTS
+    gosub write_pricing_lights
 
     ;sequence the selection lights for 1/4 second each
     REG4_EESL = (REG4_EESL & R4_CNTRL) | $08
@@ -282,18 +275,16 @@ spi_bit_count       var byte ;loop count value for SPI transfer completions
 
     ;turn off all lights
     REG7_PPLD = (REG7_PPLD & ~R7_ALL_LIGHTS) | R7_PROGRAM_LED
-    gosub write_pricing_lights       ;write pricing lights, program LED and drum control
+    gosub write_pricing_lights
     REG4_EESL = REG4_EESL & R4_CNTRL
-    gosub write_selector_lights       ;turn off selector lights, leave EE control intact
+    gosub write_selector_lights
 
     ;update position offsets from EEPROM
-    gosub eeprom_read
-    motor_offset = SPI_RX_LO
-    drum_offset = SPI_RX_HI
+    READ 0, motor_offset
+    READ 1, drum_offset
 
 ;=============================================================================
 mainloop:
-;check for lid open as switch functions change when top is raised
     gosub read_selector_and_program_switches     ;check register 2 for open lid
     if (REG2_SPSW & R2_LID_OPEN) then
         ; lid open
@@ -301,23 +292,17 @@ mainloop:
         ; program switch works to update position offset values in EEPROM
         gosub read_switches
         if up_down_switch = UPDWN_UP then
-            ;step up sw is pressed
-            gosub drum_up    ;sets up for upward drum movement
-            dadac = $C0     ;this runs the motor at low speed
+            gosub drum_up
+            dac_value = DAC_MOTOR_SLOW
             gosub write_dac
-            drum_moving = 1
         elseif up_down_switch = UPDWN_DWN then
-            gosub drum_down   ;sets up for downward drum movement
-            dadac = $C0     ;this runs the motor at low speed
+            gosub drum_down
+            dac_value = DAC_MOTOR_SLOW
             gosub write_dac
-            drum_moving = 1
         else
-            dadac = $FF     ;this stops the motor
-            gosub write_dac
-            gosub drum_stop   ;this disables motor select
+            gosub drum_stop
         endif
 
-        ;done with step switches
         ;check program switch if drum stopped, else bypass
         if drum_moving = 0 then
             gosub read_selector_and_program_switches
@@ -328,28 +313,25 @@ mainloop:
                 gosub write_pricing_lights
             else
                 if program_switch != 0 then
-                    program_switch = 0       ;clear progsw flag
-                    ;compute motor and drum offsets and write to EEPROM
-                    if drum_dir_up = 0 then
-                        ;drum was last moving in the downward direction
-                        ;compute offset to position motor at 7Fh (downward drum movement)
-                        gosub read_motor_position
-                        motor_offset = ($7f - REG0_MP + $6) & $7f
-                                    ;motor real position ;offset to 7Fh
-                                    ;increase value so that stored offset is for upward drum movement
-                                    ;zero upper bit
-                    else
+                    ; program switch was pressed and now is released
+                    program_switch = 0
+
+                    gosub read_motor_position
+                    if drum_dir_up then
                         ;drum was last moving in the upward direction
-                        ;compute offset to position motor at 7Fh (upward drum movement)
-                        gosub read_motor_position
-                        motor_offset = $7f - REG0_MP ;subtract motor position from 7Fh to get offset for 7Fh
+                        motor_offset = $7f - REG0_MP
+                    else
+                        ;drum was last moving in the downward direction
+                        motor_offset = ($7f - REG0_MP + $6) & $7f
                     endif
-                    gosub read_drum_position        ;compute drum position offset
+                    gosub read_drum_position
                     drum_offset = $c - REG1_DP ;offset to center of rows 1&2
+
                     ;write offsets to EEPROM
-                    SPI_TX_LO = motor_offset
-                    SPI_TX_MID = drum_offset
-                    gosub eeprom_write
+                    WRITE  0, motor_offset
+                    WRITE  1, drum_offset
+
+                    ; turn off program light
                     REG7_PPLD = REG7_PPLD | R7_PROGRAM_LED
                     gosub write_pricing_lights
                 endif
@@ -357,42 +339,37 @@ mainloop:
         endif
     else
         ; lid closed
-        ;set up lights based on drum position
-
-        ;update pricing switch registers
         gosub read_switches
-        ;set lights based on drum position
         gosub read_drum_position
-        temp1 = (REG1_DP + drum_offset) & $7f ;now holds current usable drum position
-        ;keep in mind usable drum position values will be 0
-        ;to 7Fh, all values will be positive
-        ;check if drum is in 1-2 range (0h-19h)
-        if temp1 <= $19 then
+        drum_position = (REG1_DP + drum_offset) & $7f ;now holds current usable drum position
+        ;keep in mind usable drum position values will be 0 to 7Fh, all values will be positive
+        if drum_position <= $19 then
             drum_position = 0 ;currently in rows 1&2 position
-        elseif temp1 <= $32 then ;check if drum is in 3-4 range (1Ah-32h)
+        elseif drum_position <= $32 then ;check if drum is in 3-4 range (1Ah-32h)
             drum_position = 1 ;currently in rows 3&4 position
-        elseif temp1 <= $4c then ;check if drum is in 5-6 range
+        elseif drum_position <= $4c then ;check if drum is in 5-6 range
             drum_position = 2 ;currently in rows 5&6 position
-        elseif temp1 <= $65 then ;check if drum is in 7-8 range
+        elseif drum_position <= $65 then ;check if drum is in 7-8 range
             drum_position = 3 ;currently in rows 7&8 position
         else ;drum must be in 9-0 range
             drum_position = 4 ;currently in rows 9&0 position
         endif
 
+        ;set up lights based on drum position
         REG7_PPLD = REG7_PPLD & ~R7_ALL_LIGHTS
-        if (pricing_switches & ($1 << (drum_position * 2)) = 0) then ; check top row
+        if (pricing_switches & (1 << (drum_position * 2)) = 0) then ; check top row
             REG7_PPLD = REG7_PPLD | R7_TOP_10
         else
             REG7_PPLD = REG7_PPLD | R7_TOP_15
         endif
-        if (pricing_switches & ($2 << (drum_position * 2)) = 0) then ; check bottom row
+        if (pricing_switches & (2 << (drum_position * 2)) = 0) then ; check bottom row
             REG7_PPLD = REG7_PPLD | R7_BOTTOM_10
         else
             REG7_PPLD = REG7_PPLD | R7_BOTTOM_15
         endif
         gosub write_pricing_lights
 
-        REG4_EESL = (REG4_EESL & R4_CNTRL) | ($8 << drum_position)
+        REG4_EESL = (REG4_EESL & R4_CNTRL) | (8 << drum_position)
         gosub write_selector_lights
 
         gosub read_selector_and_program_switches
@@ -415,32 +392,24 @@ mainloop:
         if drum_moving then
             if drum_position = selection_switch then
                 gosub ramp_drum_motor_down
-                drum_moving = 0
             endif
         else
-            ;now check to see if drum is correctly positioned
             if drum_position != selection_switch then
-                gosub move_drum
+                gosub ramp_drum_motor_up
             endif
         endif
     endif
     goto mainloop
 
 ;=============================================================================
-move_drum  ;this is the major drum movement routine
-    ;if drum is already moving return
-    if drum_moving then return
-    ; select direction - determine which way the drum must rotate
-    if drum_position <= selection_switch then
-        ; selection switch is greater than drum position
+ramp_drum_motor_up:
+    if drum_position < selection_switch then
         if (selection_switch - drum_position) < 3 then
             gosub drum_up
         else
             gosub drum_down
         endif
     else
-        ; selection switch is less than drum position
-        ;   if drum position - selection switch is < 3
         if (drum_position - selection_switch) < 3 then
             gosub drum_down
         else
@@ -448,77 +417,82 @@ move_drum  ;this is the major drum movement routine
         endif
     endif
 
-    ;start drum moving
-    drum_moving = 1
     ;start ramp_up of motor
-    for dadac = $C0 to $60 step -1
+    for dac_value = DAC_MOTOR_SLOW to DAC_MOTOR_FAST step -1
         gosub write_dac
-        if dadac != $60 then
+        if dac_value != DAC_MOTOR_FAST then
             pause 8
         endif
-    next dadac
+    next dac_value
     return
 
 ;=============================================================================
+motor_stop_val  var byte
+
 ramp_drum_motor_down:
     ;ramp down and stop motor
 ;????    tscr = $00        ;set up RTI for 8msec
     ;determine stop value based on direction
     if drum_dir_up != 0 then
-        temp4 = $7F ;drum upward direction ;use temp4 as motor stop value
+        motor_stop_val = $7F
     else
-        temp4 = $05  ;drum downward direction temp4  ;use temp4 as motor stop value
+        motor_stop_val = $05
     endif
-    temp1 = $60 ;use temp1 for motor speed value
-    for temp1 = $68 to $C0 step 8
-        dadac = temp1
+    for dac_value = DAC_MOTOR_FAST to DAC_MOTOR_SLOW step 8
         gosub write_dac
-        ;test for motor position equal to temp1 while slowing motor via RTI
+temp2               var byte ;general storage 2
         temp2 = 0       ;use temp2 as flag for twice in row read stop
 ;????    ckmpi
         gosub read_motor_position
-        if ((REG0_MP + motor_offset) & $7f) = temp4 then
+        if ((REG0_MP + motor_offset) & $7f) = motor_stop_val then
             temp2 = temp2 + 1
             if temp2 = 2 then exit
         endif
 ;????   brclr 6,tscr,ckmpi    ;test for RTI timeout for DAC update
-;????   tscr = tscr | $4 ;reset RTI flag
-    next temp1
-    ;now truly stop motor
-    dadac = $ff
+    next dac_value
+drum_stop:
+    dac_value = DAC_MOTOR_STOP
     gosub write_dac
-    ;disable drive to drum
-    gosub drum_stop
-    return
+    REG7_PPLD = (REG7_PPLD & ~(R7_DRUM_ENABLE|R7_DRUM_DOWN)) ;disable drive to drum
+    goto write_pricing_lights
 
 ;=============================================================================
 drum_up:
     drum_dir_up = 1
-    REG7_PPLD = (REG7_PPLD & ~R7_DRUM_DOWN) | R7_DRUM_ENABLE ;enable upward drive to drum
+    ; enable upward drive to drum
+    REG7_PPLD = (REG7_PPLD & ~R7_DRUM_DOWN) | R7_DRUM_ENABLE
     goto write_pricing_lights
 
 ;=============================================================================
 drum_down:
     drum_dir_up = 0
-    REG7_PPLD = REG7_PPLD | (R7_DRUM_ENABLE|R7_DRUM_DOWN) ;enable downward drive to drum
-    goto write_pricing_lights
-
-;=============================================================================
-drum_stop:
-    drum_moving = 0
-    REG7_PPLD = (REG7_PPLD & ~(R7_DRUM_ENABLE|R7_DRUM_DOWN)) ;disable drive to drum
+    ; enable downward drive to drum
+    REG7_PPLD = REG7_PPLD | (R7_DRUM_ENABLE | R7_DRUM_DOWN)
     goto write_pricing_lights
 
 ;=============================================================================
 write_dac:                          ;receives data in register_data
     REG4_EESL = REG4_EESL & R4_SELECTOR_LIGHTS ;selects DAC, leaving select lites intact
     gosub write_selector_lights
-    SPI_TX_HI = $03        ;set up to load both channels A & B ;wreg10 is now DAC command register
-    gosub write_spi_tx_hi 
-    SPI_TX_MID = dadac ;wreg9 is used for DAC data
-    gosub write_spi_tx_mid
-    spi_bit_count = 16
-    gosub spi_start
+
+    register_address =  10
+    register_data = 3        ;set up to load both channels A & B
+    gosub write_register
+
+    register_address =  9
+    register_data = dac_value
+    gosub write_register
+
+    register_address = 13     ;set spi start bit
+    register_data = 1
+    goto write_register
+    pauseus 16 * 5 ; wait 5 microseconds per bit
+
+    if dac_value = DAC_MOTOR_STOP then
+        drum_moving = 0
+    else
+        drum_moving = 1
+    endif
     return
 
 ;=============================================================================
@@ -533,29 +507,29 @@ read_register:
 
 ;=============================================================================
 read_motor_position:
-    register_address = 0        ;read motor position
+    register_address = 0
     gosub read_register
     REG0_MP = register_data
     return
 
 ;=============================================================================
 read_drum_position:
-    register_address = 1        ;read drum position
+    register_address = 1
     gosub read_register
     REG1_DP = register_data
     return
 
 ;=============================================================================
-rd2xs var byte ;register used to hold values read the same twice for debounce
+previous_value var byte ;for debounce
 
 read_selector_and_program_switches:
-    register_address = 2        ;read selector & program switches
+    register_address = 2
     gosub read_register
     do
-        rd2xs = register_data
+        previous_value = register_data
         pause 50
         gosub read_register
-    loop until register_data = rd2xs
+    loop until register_data = previous_value
     return
 
 ;=============================================================================
@@ -565,18 +539,19 @@ read_switches:
     pricing_switches = register_data
     register_address = 6
     gosub read_register
-    pricing_switches = pricing_switches | ((register_data & $3) << 8)
-    up_down_switch = UPDWN_NONE
+    pricing_switches = pricing_switches | ((register_data & 3) << 8)
     if register_data & R6_UP_SWITCH then
         up_down_switch = UPDWN_UP
     elseif register_data & R6_DOWN_SWITCH then
         up_down_switch = UPDWN_DWN
+    else
+        up_down_switch = UPDWN_NONE
     endif
     return
 
 ;=============================================================================
 write_pricing_lights:
-    register_address =  7      ;write pricing lights, program LED and drum control sta
+    register_address =  7
     register_data = REG7_PPLD
     goto write_register
 
@@ -587,30 +562,6 @@ write_selector_lights:
     goto write_register
 
 ;=============================================================================
-write_interrupt_mask:
-    register_address = 3
-    register_data = REG3_IM
-    goto write_register
-
-;=============================================================================
-write_spi_tx_lo:
-    register_address =  8      ;write SPI_TX_LO register
-    register_data = SPI_TX_LO
-    goto write_register
-
-;=============================================================================
-write_spi_tx_mid:
-    register_address =  9      ;write SPI_TX_MID register
-    register_data = SPI_TX_MID
-    goto write_register
-
-;=============================================================================
-write_spi_tx_hi:
-    register_address =  10     ;write SPI_TX_HI register
-    register_data = SPI_TX_HI
-    goto write_register
-
-;=============================================================================
 write_register:
     PORTB = register_address & ~RD_WR_L
     PORTB = PORTB | REG_SEL_ENB
@@ -618,63 +569,6 @@ write_register:
     TRISA = $00 ; PORTA all outputs
     PORTB = PORTB & ~REG_SEL_ENB
     TRISA = $ff ; PORTA all inputs
-    return
-
-;=============================================================================
-eeprom_read:
-    REG4_EESL = (REG4_EESL & R4_SELECTOR_LIGHTS) | R4_EE_SELECT ;set up to read EEPROM, 25 bit transfer
-    gosub write_selector_lights
-    SPI_TX_HI = $80        ;set up read EEPROM command for address 00h
-    gosub write_spi_tx_hi 
-    spi_bit_count = 25
-    gosub spi_start   ;starts SPI transfer for read command
-    register_address = 12
-    gosub read_register
-    SPI_RX_HI = register_data
-    register_address = 11
-    gosub read_register
-    SPI_RX_LO = register_data
-    return
-
-;=============================================================================
-eeprom_write:
-    ;Data should already be written in SPI_TX_MID and SPI_TX_LO
-    ;SPI_TX_MID contains the Drum offset to be written
-    ;SPI_TX_LO contains the Motor offset to be written
-    ;send command to enable the EEPROM to be written
-    REG4_EESL = (REG4_EESL & R4_SELECTOR_LIGHTS) | (R4_EE_SHORT|R4_EE_SELECT) ;set up to write EEPROM, 9 bit transfer
-    gosub write_selector_lights
-    SPI_TX_HI = $30 ;set up EEPROM write_enable command
-    gosub write_spi_tx_hi      ;write enable command
-    spi_bit_count = 9
-    gosub spi_start   ;start transfer,send write enable to EEPROM
-
-    REG4_EESL = (REG4_EESL & R4_SELECTOR_LIGHTS) | R4_EE_SELECT ;set up to write EEPROM, 25 bit transfer
-    gosub write_selector_lights
-    ;SPI_TX_MID must already be valid, set up msbyte data (Drum)
-    gosub write_spi_tx_mid
-    ;SPI_TX_LO must already be valid, set up lsbyte data (Motor)
-    gosub write_spi_tx_lo
-    SPI_TX_HI = $40        ;set up write EEPROM command for address 00h
-    gosub write_spi_tx_hi 
-    spi_bit_count = 25
-    gosub spi_start
-    pause 15 ;wait for about 15msec, eeprom write should be done by then
-    REG4_EESL = (REG4_EESL & R4_SELECTOR_LIGHTS) | (R4_EE_SHORT|R4_EE_SELECT) ;set up to write EEPROM, 9 bit transfer
-    gosub write_selector_lights
-    SPI_TX_HI = $00         ;set up EEPROM write_disable command
-    gosub write_spi_tx_hi 
-    ;transfer 9 bits at 0.5usec/bit, use count of 10h
-    spi_bit_count = 9
-    gosub spi_start   ;send write disable to EEPROM, start transfer
-    return
-
-;=============================================================================
-spi_start:            ;initiates SPI transfer, assumes registers are set up
-    register_address = 13     ;set spi start bit
-    register_data = $01
-    goto write_register
-    pauseus spi_bit_count * 5 ; wait 5 microseconds per bit
     return
 
 ;=============================================================================
