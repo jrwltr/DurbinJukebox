@@ -28,7 +28,7 @@ ANSELA = %00000000    'Set all pins for digital operation
 ANSELB = %00000000
 ANSELC = %00000000
 
-TRISB  = %11111111    'Set PORTB bits all inputs
+TRISA  = %11111111    'Set PORTB bits all inputs
 TRISB  = %00000000    'Set PORTB bits all outputs
 
 RB1PPS = $09    ; pin select RB1 is RB1
