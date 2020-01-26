@@ -28,10 +28,8 @@ ANSELA = %00000000    'Set all pins for digital operation
 ANSELB = %00000000
 ANSELC = %00000000
 
-TRISA  = %00100100    'Set PORTA bits 2, 5 as inputs, the rest as outputs
-TRISB  = %00001111    'Set PORTB bits 0, 1, 2, 3 as inputs, the rest as outputs
-TRISC  = %10110001    'Set PORTC bits 0, 4, 5, 7 as inputs, the rest as outputs
-WPUA   = %00100100    'Set weak pullups on PORTA bits 2, 5, the rest as outputs
+TRISB  = %11111111    'Set PORTB bits all inputs
+TRISB  = %00000000    'Set PORTB bits all outputs
 
 RB1PPS = $09    ; pin select RB1 is RB1
 RB2PPS = $0a    ; pin select RB2 is RB2
