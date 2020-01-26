@@ -233,9 +233,10 @@ program_switch      var bit  ;set non-zero when program switch is enabled
 drum_dir_up         var bit  ;set non-zero when drum last moved up, zero when last down
 drum_moving         var bit  ;set non-zero when drum is moving
 dac_value           var byte ;used to store data sent to DAC
-    DAC_MOTOR_STOP  con $ff
-    DAC_MOTOR_SLOW  con $c0
-    DAC_MOTOR_FAST  con $60
+    DAC_MOTOR_STOP      con $ff
+    DAC_MOTOR_SLOW      con $c0
+    DAC_MOTOR_FAST      con $60
+    DAC_MOTOR_DOWN_STEP con 8
 drum_position       var byte ;current drum position,0=rows 1&2, 1=rows 3&4,.., 4=rows 9&0
 selection_switch    var byte ;current selection switch flag, 0=rows 1&2, .., 4=rows 9&0
 
@@ -428,28 +429,53 @@ ramp_drum_motor_up:
 
 ;=============================================================================
 motor_stop_val  var byte
+count_stop_val  var byte
 
 ramp_drum_motor_down:
-    ;ramp down and stop motor
-;????    tscr = $00        ;set up RTI for 8msec
     ;determine stop value based on direction
     if drum_dir_up != 0 then
         motor_stop_val = $7F
     else
         motor_stop_val = $05
     endif
-    for dac_value = DAC_MOTOR_FAST to DAC_MOTOR_SLOW step 8
+    dac_value = DAC_MOTOR_FAST
+ramp_down_loop:
+    if dac_value < DAC_MOTOR_SLOW then
+        dac_value = dac_value + DAC_MOTOR_DOWN_STEP
         gosub write_dac
-temp2               var byte ;general storage 2
-        temp2 = 0       ;use temp2 as flag for twice in row read stop
-;????    ckmpi
+        if dac_value < DAC_MOTOR_SLOW then
+            gosub start_8_millisecond_timer
+        endif
+    endif
+    count_stop_val = 0
+    do
         gosub read_motor_position
         if ((REG0_MP + motor_offset) & $7f) = motor_stop_val then
-            temp2 = temp2 + 1
-            if temp2 = 2 then exit
+            count_stop_val = count_stop_val + 1
+            if count_stop_val = 2 then 
+                gosub stop_timer
+                goto drum_stop
+            endif
         endif
-;????   brclr 6,tscr,ckmpi    ;test for RTI timeout for DAC update
-    next dac_value
+    loop until PIR0.5 ; until timer expires (timer may not be running if going slow)
+    gosub stop_timer
+    goto ramp_down_loop
+
+;=============================================================================
+start_8_millisecond_timer:
+    ; initialize timer 0 for 8 milliseconds and start it
+    TMR0H = $ff  ; timer 0 8 bit comparator value
+    TMR0L = 0    ; timer 0 counter starts at zero
+    T0CON1 = $6a ; T0CON1.TOCS<2:0>=HFINTOSC, T0CON1.T0ASYNC=0, T0CON1.T0CKPS<3:0>=$a (1:1024 prescaler)
+    PIR0.5 = 0   ; PIR0.TMR0IF = 0  clear timer 0 interrupt flag
+    T0CON0 = $80 ; T0CON0.T0EN = 1  enable timer
+    return
+
+stop_timer:
+    T0CON0 = $00 ; T0CON0.T0EN = 0  disable timer
+    return
+
+;=============================================================================
 drum_stop:
     dac_value = DAC_MOTOR_STOP
     gosub write_dac
