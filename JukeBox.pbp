@@ -67,7 +67,8 @@ CLEAR       ; zero all variables
 INCLUDE "ProcessorConfiguration.pbp"
 
 ;=============================================================================
-REG0_MP     var byte ;storage for data read from Reg 0
+motor_position          var byte
+motor_start_position    var byte
     ;* Register 0 - Drum, Motor Position, Read Only
     ;*     Motor position, a 360 degree 7-bit binary readout.
     ;*     This is actually an 8-bit gray code that is converted by
@@ -78,7 +79,8 @@ REG0_MP     var byte ;storage for data read from Reg 0
     ;*     This is used to position the selected menu section.
 
 ;=============================================================================
-REG1_DP     var byte ;storage for data read from Reg 1
+drum_position   var byte ;current drum position
+drum_offset     var byte[5]
     ;* Register 1 - Drum, Drum Position, Read Only
     ;*     Menu drum position, a 360 degree 7-bit binary readout.
     ;*     This is actually an 8-bit gray code that is converted by
@@ -227,18 +229,15 @@ REG7_PPLD   var byte ;Ram mirror for data written to Reg 7
 ;=============================================================================
 register_address    var byte ;address of register to be accessed
 register_data       var byte ;data written to or read from a register
-drum_offset         var byte ;menu drum position offset
-motor_offset        var byte ;motor position offset ;motor offset for upward drum movement
 program_switch      var bit  ;set non-zero when program switch is enabled
-drum_dir_up         var bit  ;set non-zero when drum last moved up, zero when last down
 drum_moving         var bit  ;set non-zero when drum is moving
 dac_value           var byte ;used to store data sent to DAC
     DAC_MOTOR_STOP      con $ff
     DAC_MOTOR_SLOW      con $c0
     DAC_MOTOR_FAST      con $60
     DAC_MOTOR_DOWN_STEP con 8
-drum_position       var byte ;current drum position,0=rows 1&2, 1=rows 3&4,.., 4=rows 9&0
-selection_switch    var byte ;current selection switch flag, 0=rows 1&2, .., 4=rows 9&0
+drum_index          var byte ;current drum position,0=rows 1&2, 1=rows 3&4,.., 4=rows 9&0
+selector_switch     var byte ;current selection switch flag, 0=rows 1&2, .., 4=rows 9&0
 
 ;=============================================================================
     PORTB = RD_WR_L
@@ -280,13 +279,41 @@ selection_switch    var byte ;current selection switch flag, 0=rows 1&2, .., 4=r
     REG4_EESL = REG4_EESL & R4_CNTRL
     gosub write_selector_lights
 
-    ;update position offsets from EEPROM
-    READ 0, motor_offset
-    READ 1, drum_offset
+    ;read drum offsets from EEPROM
+    READ 0, drum_offset[0]
+    READ 1, drum_offset[1]
+    READ 2, drum_offset[2]
+    READ 3, drum_offset[3]
+    READ 4, drum_offset[4]
+
+    ; clear high bits incase of uninitialized EEPROM that reads $ff
+    drum_offset[0] = drum_offset[0] & $7f
+    drum_offset[1] = drum_offset[1] & $7f
+    drum_offset[2] = drum_offset[2] & $7f
+    drum_offset[3] = drum_offset[3] & $7f
+    drum_offset[4] = drum_offset[4] & $7f
+
+    gosub compute_drum_index
 
 ;=============================================================================
 mainloop:
-    gosub read_selector_and_program_switches     ;check register 2 for open lid
+    gosub read_selector_and_program_switches
+    if (REG2_SPSW & R2_SELECT_SW_1) = 0 then
+        ;position switch 1_2 is closed
+        selector_switch = 0
+    elseif (REG2_SPSW & R2_SELECT_SW_2) = 0 then
+        ;position switch 3_4 is closed
+        selector_switch = 1
+    elseif (REG2_SPSW & R2_SELECT_SW_3) = 0 then
+        ;position switch 5_6 is closed
+        selector_switch = 2
+    elseif (REG2_SPSW & R2_SELECT_SW_4) = 0 then
+        ;position switch 7_8 is closed
+        selector_switch = 3
+    else
+        ;position switch 9_0 must be closed
+        selector_switch = 4
+    endif
     if (REG2_SPSW & R2_LID_OPEN) then
         ; lid open
         ; up/down step switches work to position drum
@@ -301,101 +328,57 @@ mainloop:
             dac_value = DAC_MOTOR_SLOW
             gosub write_dac
         else
-            gosub drum_stop
-        endif
+            if drum_moving = 0 then gosub drum_stop
 
-        ;check program switch if drum stopped, else bypass
-        if drum_moving = 0 then
-            gosub read_selector_and_program_switches
             if (REG2_SPSW & R2_PROGRAM_SW) = 0 then
                 program_switch = 1
                 ;turn on program LED
                 REG7_PPLD = REG7_PPLD & ~R7_PROGRAM_LED
                 gosub write_pricing_lights
-            else
-                if program_switch != 0 then
-                    ; program switch was pressed and now is released
-                    program_switch = 0
+            elseif program_switch != 0 then
+                ; program switch was pressed and now is released
+                program_switch = 0
 
-                    gosub read_motor_position
-                    if drum_dir_up then
-                        ;drum was last moving in the upward direction
-                        motor_offset = $7f - REG0_MP
-                    else
-                        ;drum was last moving in the downward direction
-                        motor_offset = ($7f - REG0_MP + $6) & $7f
-                    endif
-                    gosub read_drum_position
-                    drum_offset = $c - REG1_DP ;offset to center of rows 1&2
+                ;write drum position to EEPROM
+                gosub read_drum_position
+                WRITE selector_switch, drum_position
+                drum_index = selector_switch
+                drum_offset[drum_index] = drum_position
 
-                    ;write offsets to EEPROM
-                    WRITE  0, motor_offset
-                    WRITE  1, drum_offset
-
-                    ; turn off program light
-                    REG7_PPLD = REG7_PPLD | R7_PROGRAM_LED
-                    gosub write_pricing_lights
-                endif
+                ; turn off program light
+                REG7_PPLD = REG7_PPLD | R7_PROGRAM_LED
+                gosub write_pricing_lights
             endif
         endif
     else
         ; lid closed
         gosub read_switches
         gosub read_drum_position
-        drum_position = (REG1_DP + drum_offset) & $7f ;now holds current usable drum position
-        ;keep in mind usable drum position values will be 0 to 7Fh, all values will be positive
-        if drum_position <= $19 then
-            drum_position = 0 ;currently in rows 1&2 position
-        elseif drum_position <= $32 then ;check if drum is in 3-4 range (1Ah-32h)
-            drum_position = 1 ;currently in rows 3&4 position
-        elseif drum_position <= $4c then ;check if drum is in 5-6 range
-            drum_position = 2 ;currently in rows 5&6 position
-        elseif drum_position <= $65 then ;check if drum is in 7-8 range
-            drum_position = 3 ;currently in rows 7&8 position
-        else ;drum must be in 9-0 range
-            drum_position = 4 ;currently in rows 9&0 position
-        endif
-
+ 
         ;set up lights based on drum position
         REG7_PPLD = REG7_PPLD & ~R7_ALL_LIGHTS
-        if (pricing_switches & (1 << (drum_position * 2)) = 0) then ; check top row
+        if (pricing_switches & (1 << (drum_index * 2)) = 0) then ; check top row
             REG7_PPLD = REG7_PPLD | R7_TOP_10
         else
             REG7_PPLD = REG7_PPLD | R7_TOP_15
         endif
-        if (pricing_switches & (2 << (drum_position * 2)) = 0) then ; check bottom row
+        if (pricing_switches & (2 << (drum_index * 2)) = 0) then ; check bottom row
             REG7_PPLD = REG7_PPLD | R7_BOTTOM_10
         else
             REG7_PPLD = REG7_PPLD | R7_BOTTOM_15
         endif
         gosub write_pricing_lights
 
-        REG4_EESL = (REG4_EESL & R4_CNTRL) | (8 << drum_position)
+        REG4_EESL = (REG4_EESL & R4_CNTRL) | (8 << drum_index)
         gosub write_selector_lights
 
-        gosub read_selector_and_program_switches
-        if (REG2_SPSW & R2_SELECT_SW_1) = 0 then
-            ;position switch 1_2 is closed
-            selection_switch = 0
-        elseif (REG2_SPSW & R2_SELECT_SW_2) = 0 then
-            ;position switch 3_4 is closed
-            selection_switch = 1
-        elseif (REG2_SPSW & R2_SELECT_SW_3) = 0 then
-            ;position switch 5_6 is closed
-            selection_switch = 2
-        elseif (REG2_SPSW & R2_SELECT_SW_4) = 0 then
-            ;position switch 7_8 is closed
-            selection_switch = 3
-        else
-            ;position switch 9_0 must be closed
-            selection_switch = 4
-        endif
         if drum_moving then
-            if drum_position = selection_switch then
+            gosub compute_drum_index
+            if drum_index = selector_switch then
                 gosub ramp_drum_motor_down
             endif
         else
-            if drum_position != selection_switch then
+            if drum_index != selector_switch then
                 gosub ramp_drum_motor_up
             endif
         endif
@@ -403,15 +386,28 @@ mainloop:
     goto mainloop
 
 ;=============================================================================
+compute_drum_index:
+    for drum_index = 0 to 4 
+        if ((drum_offset[drum_index] - drum_position) & $7f) <= 25 then
+            return
+        endif
+    next drum_index
+    drum_index = 4
+    return
+
+;=============================================================================
 ramp_drum_motor_up:
-    if drum_position < selection_switch then
-        if (selection_switch - drum_position) < 3 then
+    gosub read_motor_position
+    motor_start_position = motor_position
+
+    if drum_index < selector_switch then
+        if (selector_switch - drum_index) < 3 then
             gosub drum_up
         else
             gosub drum_down
         endif
     else
-        if (drum_position - selection_switch) < 3 then
+        if (drum_index - selector_switch) < 3 then
             gosub drum_down
         else
             gosub drum_up
@@ -428,16 +424,9 @@ ramp_drum_motor_up:
     return
 
 ;=============================================================================
-motor_stop_val  var byte
 count_stop_val  var byte
 
 ramp_drum_motor_down:
-    ;determine stop value based on direction
-    if drum_dir_up != 0 then
-        motor_stop_val = $7F
-    else
-        motor_stop_val = $05
-    endif
     dac_value = DAC_MOTOR_FAST
 ramp_down_loop:
     if dac_value < DAC_MOTOR_SLOW then
@@ -450,7 +439,7 @@ ramp_down_loop:
     count_stop_val = 0
     do
         gosub read_motor_position
-        if ((REG0_MP + motor_offset) & $7f) = motor_stop_val then
+        if (motor_position = motor_start_position) then
             count_stop_val = count_stop_val + 1
             if count_stop_val = 2 then 
                 gosub stop_timer
@@ -484,14 +473,12 @@ drum_stop:
 
 ;=============================================================================
 drum_up:
-    drum_dir_up = 1
     ; enable upward drive to drum
     REG7_PPLD = (REG7_PPLD & ~R7_DRUM_DOWN) | R7_DRUM_ENABLE
     goto write_pricing_lights
 
 ;=============================================================================
 drum_down:
-    drum_dir_up = 0
     ; enable downward drive to drum
     REG7_PPLD = REG7_PPLD | (R7_DRUM_ENABLE | R7_DRUM_DOWN)
     goto write_pricing_lights
@@ -535,14 +522,14 @@ read_register:
 read_motor_position:
     register_address = 0
     gosub read_register
-    REG0_MP = register_data
+    motor_position = register_data
     return
 
 ;=============================================================================
 read_drum_position:
     register_address = 1
     gosub read_register
-    REG1_DP = register_data
+    drum_position = register_data
     return
 
 ;=============================================================================
