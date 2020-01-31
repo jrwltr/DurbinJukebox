@@ -246,6 +246,22 @@ INCLUDE "LCD4x20.pbp"
 INCLUDE "EEPROM.pbp"
 
 ;=============================================================================
+display_update:
+    gosub display_clear
+    DisplayRow = 0
+    DisplayCol = 0
+    gosub display_set_cursor
+    ARRAYWRITE DisplayString, [ "DRUM  ", dec drum_position, 0]
+    gosub display_write_string
+
+    DisplayCol = 0
+    DisplayRow = 1
+    gosub display_set_cursor
+    ARRAYWRITE DisplayString, [ "MOTOR ", dec motor_position, 0]
+    gosub display_write_string
+    return
+
+;=============================================================================
 init:
     PORTB = RD_WR_L
 
@@ -300,6 +316,7 @@ init:
     gosub compute_drum_index
 
 ;=============================================================================
+gosub display_update
 mainloop:
     gosub read_selector_and_program_switches
     if (REG2_SPSW & R2_SELECT_SW_1) = 0 then
@@ -476,7 +493,9 @@ drum_stop:
     dac_value = DAC_MOTOR_STOP
     gosub write_dac
     REG7_PPLD = (REG7_PPLD & ~(R7_DRUM_ENABLE|R7_DRUM_DOWN)) ;disable drive to drum
-    goto write_pricing_lights
+    gosub write_pricing_lights
+    gosub display_update
+    return
 
 ;=============================================================================
 drum_up:
