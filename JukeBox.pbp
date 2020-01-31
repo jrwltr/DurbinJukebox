@@ -240,7 +240,16 @@ drum_index          var byte ;current drum position,0=rows 1&2, 1=rows 3&4,.., 4
 selector_switch     var byte ;current selection switch flag, 0=rows 1&2, .., 4=rows 9&0
 
 ;=============================================================================
+    goto init
+
+INCLUDE "LCD4x20.pbp"
+INCLUDE "EEPROM.pbp"
+
+;=============================================================================
+init:
     PORTB = RD_WR_L
+
+    gosub display_initialize
 
     ;set interrupt mask register
     gosub read_selector_and_program_switches
@@ -280,18 +289,13 @@ selector_switch     var byte ;current selection switch flag, 0=rows 1&2, .., 4=r
     gosub write_selector_lights
 
     ;read drum offsets from EEPROM
-    READ 0, drum_offset[0]
-    READ 1, drum_offset[1]
-    READ 2, drum_offset[2]
-    READ 3, drum_offset[3]
-    READ 4, drum_offset[4]
-
-    ; clear high bits incase of uninitialized EEPROM that reads $ff
-    drum_offset[0] = drum_offset[0] & $7f
-    drum_offset[1] = drum_offset[1] & $7f
-    drum_offset[2] = drum_offset[2] & $7f
-    drum_offset[3] = drum_offset[3] & $7f
-    drum_offset[4] = drum_offset[4] & $7f
+    for drum_index = 0 to 4
+        ee_address = drum_index
+        gosub eeprom_read_byte
+        drum_offset[drum_index] = ee_byte
+        ; clear high bits incase of uninitialized EEPROM that reads $ff
+        drum_offset[drum_index] = drum_offset[drum_index] & $7f
+    next drum_index
 
     gosub compute_drum_index
 
@@ -341,7 +345,10 @@ mainloop:
 
                 ;write drum position to EEPROM
                 gosub read_drum_position
-                WRITE selector_switch, drum_position
+                ee_address = selector_switch
+                ee_byte = drum_position
+                gosub eeprom_write_byte
+
                 drum_index = selector_switch
                 drum_offset[drum_index] = drum_position
 

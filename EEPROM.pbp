@@ -1,0 +1,37 @@
+;=============================================================================
+; This module provides functions to read and write EEPROM.  This supports
+; eeprom access to either the PIC internal EEPROM or an external
+; 24CW128X but not both (see the conditional compilation below).
+; 
+;=============================================================================
+
+ee_address      var word
+ee_byte         var byte
+
+;=============================================================================
+; eeprom_read_byte:
+;   input:  ee_address - the eeprom address from which to read
+;   output: ee_byte - the byte value read from eeprom
+;
+eeprom_read_byte:
+    I2CWRITE I2C_DATA, I2C_CLK, EEPROM_I2C_ADDRESS, [ ee_address.byte1, ee_address.byte0 ], eeprom_i2c_error
+    I2CREAD I2C_DATA, I2C_CLK, EEPROM_I2C_ADDRESS, [ ee_byte ], eeprom_i2c_error
+    return
+
+;=============================================================================
+; eeprom_write_byte:
+;   input:  ee_address - the eeprom address to which to write
+;           ee_byte - the byte value to be written to eeprom
+;
+eeprom_write_byte:
+    I2CWRITE I2C_DATA, I2C_CLK, EEPROM_I2C_ADDRESS, [ ee_address.byte1, ee_address.byte0, ee_byte ], eeprom_i2c_error
+    pause 10
+    return
+
+
+;=============================================================================
+eeprom_i2c_error:
+    ARRAYWRITE DisplayString, ["EEPROM Error", 0]
+    goto display_error_message
+
+;=============================================================================

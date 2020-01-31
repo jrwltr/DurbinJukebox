@@ -30,6 +30,7 @@ ANSELC = %00000000
 
 TRISA  = %11111111    'Set PORTB bits all inputs
 TRISB  = %00000000    'Set PORTB bits all outputs
+TRISC  = %00010000    'Set PORTC bit 4 as input, all else outputs
 
 RB1PPS = $09    ; pin select RB1 is RB1
 RB2PPS = $0a    ; pin select RB2 is RB2
@@ -47,6 +48,17 @@ TMR0L = 0       ; timer 0 counter starts at zero
 T0CON1 = $6a    ; T0CON1.TOCS<2:0> = HFINTOSC, T0CON1.T0ASYNC = 0, T0CON1.T0CKPS<3:0> = $a (1:1024 prescaler)
 PIR0.5 = 0      ; PIR0.TMR0IF = 0  clear timer 0 interrupt flag
 PIE0.5 = 1      ; PIE0.TMR0IE = 1  enable timer 0 interrupt
+
+;=============================================================================
+DISPLAY_I2C_ADDRESS     con $4E
+EEPROM_I2C_ADDRESS      con $A0
+
+I2C_CLK         var PORTC.0
+I2C_DATA        var PORTC.1
+
+INT_L           var PORTC.4
+
+EEPROM_BYTES    con 16384
 
 ;=============================================================================
 goto skip_enable
