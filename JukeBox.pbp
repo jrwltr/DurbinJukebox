@@ -263,6 +263,10 @@ display_update:
 
 ;=============================================================================
 init:
+    ; wait for board reset to complete
+    do
+    loop until PORTC.3 = 1 
+
     PORTB = RD_WR_L
 
     gosub display_initialize
