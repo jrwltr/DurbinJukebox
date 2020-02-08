@@ -30,7 +30,7 @@ ANSELC = %00000000
 
 TRISA  = %11111111    'Set PORTB bits all inputs
 TRISB  = %00000000    'Set PORTB bits all outputs
-TRISC  = %00011000    'Set PORTC bits 3 and 4 as input, all else outputs
+TRISC  = %00001100    'Set PORTC bits 2, 3 as input, all else outputs
 
 RB1PPS = $09    ; pin select RB1 is RB1
 RB2PPS = $0a    ; pin select RB2 is RB2
@@ -56,7 +56,7 @@ EEPROM_I2C_ADDRESS      con $A0
 I2C_CLK         var PORTC.0
 I2C_DATA        var PORTC.1
 
-INT_L           var PORTC.4
+INT_L           var PORTC.2
 
 EEPROM_BYTES    con 16384
 
