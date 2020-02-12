@@ -246,19 +246,38 @@ INCLUDE "LCD4x20.pbp"
 INCLUDE "EEPROM.pbp"
 
 ;=============================================================================
+display_update_needed   var     byte
+
 display_update:
+    display_update_needed = 0
     gosub display_clear
     DisplayRow = 0
     DisplayCol = 0
     gosub display_set_cursor
-    ARRAYWRITE DisplayString, [ "DRUM  ", dec drum_position, 0]
+
+    ARRAYWRITE DisplayString, [ "SW", dec selector_switch, " ", 0]
+    gosub display_write_string
+
+    if (REG2_SPSW & R2_LID_OPEN) then
+        ARRAYWRITE DisplayString, [ "OPEN", 0]
+    else
+        ARRAYWRITE DisplayString, [ "    ", 0]
+    endif
+    gosub display_write_string
+
+    if (drum_moving = 0) and (REG7_PPLD & R7_DRUM_DOWN) then
+        ARRAYWRITE DisplayString, [ "DOwn", 0]
+    else
+        ARRAYWRITE DisplayString, [ "UP", 0]
+    endif
     gosub display_write_string
 
     DisplayCol = 0
     DisplayRow = 1
     gosub display_set_cursor
-    ARRAYWRITE DisplayString, [ "MOTOR ", dec motor_position, 0]
+    ARRAYWRITE DisplayString, [ "D ", dec drum_position, " M ", dec motor_position, 0]
     gosub display_write_string
+
     return
 
 ;=============================================================================
@@ -320,7 +339,7 @@ init:
     gosub compute_drum_index
 
 ;=============================================================================
-gosub display_update
+display_update_needed = 1
 mainloop:
     gosub read_selector_and_program_switches
     if (REG2_SPSW & R2_SELECT_SW_1) = 0 then
@@ -353,7 +372,7 @@ mainloop:
             dac_value = DAC_MOTOR_SLOW
             gosub write_dac
         else
-            if drum_moving = 0 then gosub drum_stop
+            if drum_moving then gosub drum_stop
 
             if (REG2_SPSW & R2_PROGRAM_SW) = 0 then
                 program_switch = 1
@@ -410,6 +429,9 @@ mainloop:
                 gosub ramp_drum_motor_up
             endif
         endif
+    endif
+    if display_update_needed then
+        gosub display_update
     endif
     goto mainloop
 
@@ -498,7 +520,7 @@ drum_stop:
     gosub write_dac
     REG7_PPLD = (REG7_PPLD & ~(R7_DRUM_ENABLE|R7_DRUM_DOWN)) ;disable drive to drum
     gosub write_pricing_lights
-    gosub display_update
+    display_update_needed = 1
     return
 
 ;=============================================================================
@@ -564,6 +586,7 @@ read_drum_position:
 
 ;=============================================================================
 previous_value var byte ;for debounce
+last_reg2_value  var byte
 
 read_selector_and_program_switches:
     register_address = 2
@@ -573,9 +596,17 @@ read_selector_and_program_switches:
         pause 50
         gosub read_register
     loop until register_data = previous_value
+    REG2_SPSW = register_data
+    if REG2_SPSW != last_reg2_value then
+        last_reg2_value = REG2_SPSW
+        display_update_needed = 1
+    endif
     return
 
 ;=============================================================================
+last_up_down_switch     var byte
+last_pricing_switches   var word
+
 read_switches:
     register_address = 5
     gosub read_register
@@ -583,12 +614,20 @@ read_switches:
     register_address = 6
     gosub read_register
     pricing_switches = pricing_switches | ((register_data & 3) << 8)
+    if last_pricing_switches != pricing_switches then
+        last_pricing_switches = pricing_switches
+        display_update_needed = 1
+    endif
     if register_data & R6_UP_SWITCH then
         up_down_switch = UPDWN_UP
     elseif register_data & R6_DOWN_SWITCH then
         up_down_switch = UPDWN_DWN
     else
         up_down_switch = UPDWN_NONE
+    endif
+    if last_up_down_switch != up_down_switch then
+        last_up_down_switch = up_down_switch
+        display_update_needed = 1
     endif
     return
 
