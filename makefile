@@ -8,8 +8,7 @@ all: $(HEXTARGETS)
 ##############################################################################
 SOURCE 			=	JukeBox.pbp \
 					LCD4x20.pbp \
-					EEPROM.pbp \
-					ProcessorConfiguration.pbp
+					EEPROM.pbp
 
 ##############################################################################
 JukeBox.hex				: $(SOURCE)

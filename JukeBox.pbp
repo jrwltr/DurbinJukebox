@@ -64,7 +64,58 @@
 
 CLEAR       ; zero all variables
 
-INCLUDE "ProcessorConfiguration.pbp"
+;=============================================================================
+asm
+    ERRORLEVEL -306  ;disable warning about crossing page boundary
+endasm
+
+;=============================================================================
+#if __PROCESSOR__ = "16F19156"
+#CONFIG
+    __config _CONFIG1, _FEXTOSC_OFF & _RSTOSC_HFINT32 & _CLKOUTEN_OFF & _VBATEN_OFF & _LCDPEN_OFF & _CSWEN_ON & _FCMEN_ON
+    __config _CONFIG2, _MCLRE_ON & _PWRTE_PWRT_64 & _LPBOREN_OFF & _BOREN_SBOREN & _BORV_LO & _ZCD_OFF & _PPS1WAY_OFF & _STVREN_ON
+    __config _CONFIG3, _WDTCPS_WDTCPS_31 & _WDTE_SWDTEN & _WDTCWS_WDTCWS_7 & _WDTCCS_LFINTOSC
+    __config _CONFIG4, _BBSIZE_512 & _BBEN_OFF & _SAFEN_OFF & _WRTAPP_OFF & _WRTB_OFF & _WRTC_OFF & _WRTD_OFF & _WRTSAF_OFF & _LVP_OFF
+    __config _CONFIG5, _CP_OFF
+
+#ENDCONFIG
+#endif
+
+;=============================================================================
+; DEFINEs:
+define OSC 32
+define I2C_SLOW 1   'Enables using 100KHz I2C device with OSC above 8MHz
+define WRITE_INT 1  'Disables interrupts during EEPROM writes
+
+;=============================================================================
+; INITIALIZE REGISTERS:
+OSCCON1 = %00000000   'Internal Osc set to 32MHz, clock determined by Config FOSC bits
+ANSELA = %00000000    'Set all pins for digital operation
+ANSELB = %00000000
+ANSELC = %00000000
+
+TRISA  = %11111111    'Set PORTB bits all inputs
+TRISB  = %00000000    'Set PORTB bits all outputs
+TRISC  = %00001100    'Set PORTC bits 2, 3 as input, all else outputs
+
+;????RB1PPS = $09    ; pin select RB1 is RB1
+;????RB2PPS = $0a    ; pin select RB2 is RB2
+;????RB3PPS = $0b    ; pin select RB3 is RB3
+;????RC4PPS = $14    ; pin select RC4 is RC4
+
+;=============================================================================
+DISPLAY_I2C_ADDRESS     con $4E
+EEPROM_I2C_ADDRESS      con $A0
+
+I2C_CLK         var PORTC.0
+I2C_DATA        var PORTC.1
+
+INT_L           var PORTC.2
+
+EEPROM_BYTES    con 16384
+
+;=============================================================================
+
 
 ;=============================================================================
 motor_position          var byte
@@ -242,6 +293,7 @@ selector_switch     var byte ;current selection switch flag, 0=rows 1&2, .., 4=r
 ;=============================================================================
     goto init
 
+#define DO_4_LINE
 INCLUDE "LCD4x20.pbp"
 INCLUDE "EEPROM.pbp"
 
@@ -250,7 +302,7 @@ display_update_needed   var     byte
 
 display_update:
     display_update_needed = 0
-    gosub display_clear
+;????    gosub display_clear
     DisplayRow = 0
     DisplayCol = 0
     gosub display_set_cursor
@@ -265,12 +317,14 @@ display_update:
     endif
     gosub display_write_string
 
-    if (drum_moving = 0) and (REG7_PPLD & R7_DRUM_DOWN) then
-        ARRAYWRITE DisplayString, [ "DOwn", 0]
-    else
-        ARRAYWRITE DisplayString, [ "UP", 0]
+    if drum_moving then
+        if (REG7_PPLD & R7_DRUM_DOWN) then
+            ARRAYWRITE DisplayString, [ "Down", 0]
+        else
+            ARRAYWRITE DisplayString, [ "UP", 0]
+        endif
+        gosub display_write_string
     endif
-    gosub display_write_string
 
     DisplayCol = 0
     DisplayRow = 1
@@ -282,6 +336,12 @@ display_update:
 
 ;=============================================================================
 init:
+    TRISA = $00 ; PORTA all outputs;????
+    TRISB = $00 ; PORTB all outputs;????
+    PORTA = register_data;????
+    PORTB = register_data;????
+    register_data = register_data + 1;????
+    goto init;????
     ; wait for board reset to complete
     do
     loop until PORTC.3 = 1 
@@ -358,11 +418,12 @@ mainloop:
         ;position switch 9_0 must be closed
         selector_switch = 4
     endif
+
+    gosub read_switches
     if (REG2_SPSW & R2_LID_OPEN) then
         ; lid open
         ; up/down step switches work to position drum
         ; program switch works to update position offset values in EEPROM
-        gosub read_switches
         if up_down_switch = UPDWN_UP then
             gosub drum_up
             dac_value = DAC_MOTOR_SLOW
@@ -399,7 +460,6 @@ mainloop:
         endif
     else
         ; lid closed
-        gosub read_switches
         gosub read_drum_position
  
         ;set up lights based on drum position
@@ -562,12 +622,11 @@ write_dac:                          ;receives data in register_data
 
 ;=============================================================================
 read_register:
-    TRISA = $ff ; PORTA all inputs
     PORTB = register_address | RD_WR_L
-    PORTB = register_address | REG_SEL_ENB
+    PORTB = register_address | RD_WR_L | REG_SEL_ENB
     pauseus 1 ;give some extra time for data to be valid
     register_data = PORTA ;save register contents in register_data
-    PORTB = PORTB & ~REG_SEL_ENB
+    PORTB = register_address
     return
 
 ;=============================================================================
@@ -597,6 +656,13 @@ read_selector_and_program_switches:
         gosub read_register
     loop until register_data = previous_value
     REG2_SPSW = register_data
+    DisplayCol = 0;????
+    DisplayRow = 2;????
+    gosub display_set_cursor;????
+    counter var byte;????
+    ARRAYWRITE DisplayString, [ dec register_data, " ", dec counter, 0];????
+    counter = counter + 1;????
+    gosub display_write_string;????
     if REG2_SPSW != last_reg2_value then
         last_reg2_value = REG2_SPSW
         display_update_needed = 1
@@ -645,11 +711,11 @@ write_selector_lights:
 
 ;=============================================================================
 write_register:
-    PORTB = register_address & ~RD_WR_L
-    PORTB = PORTB | REG_SEL_ENB
+    PORTB = register_address
+    PORTB = register_address | REG_SEL_ENB
     PORTA = register_data ;store data to be put on bus
     TRISA = $00 ; PORTA all outputs
-    PORTB = PORTB & ~REG_SEL_ENB
+    PORTB = register_address
     TRISA = $ff ; PORTA all inputs
     return
 
