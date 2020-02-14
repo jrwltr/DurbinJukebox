@@ -110,7 +110,7 @@ EEPROM_BYTES    con 16384
 
 ;=============================================================================
 NUM_DRUM_POSITIONS  con 5
-GEAR_SLOP        con 6
+GEAR_SLOP           con 6
 
 ;=============================================================================
 motor_position          var byte
@@ -277,28 +277,32 @@ program_switch      var bit  ;set non-zero when program switch is enabled
 drum_moving         var bit  ;set non-zero when drum is moving
 dac_value           var byte ;used to store data sent to DAC
     DAC_MOTOR_STOP      con $ff
-    DAC_MOTOR_SLOW      con $c0
-    DAC_MOTOR_FAST      con $60
+    DAC_MOTOR_SLOW      con $d0
+    DAC_MOTOR_FAST      con $90
     DAC_MOTOR_DOWN_STEP con 8
 selector_switch     var byte ;current selection switch flag, 0=rows 1&2, .., 4=rows 9&0
 temp_math           var byte
+last_pricing_switches   var word
 
 ;=============================================================================
     goto init
 
+#define DO_DISPLAY
+#ifdef DO_DISPLAY
 #define DO_4_LINE
 INCLUDE "LCD4x20.pbp"
+#endif
 INCLUDE "EEPROM.pbp"
 
 ;=============================================================================
+#ifdef DO_DISPLAY
 display_update_needed   var     byte
 
 display_update:
     display_update_needed = 0
-#ifdef DEBUG_PORTS
-#else
+
     gosub display_clear
-#endif
+
     DisplayRow = 0
     DisplayCol = 0
     gosub display_set_cursor
@@ -332,15 +336,22 @@ display_update:
     endif
     gosub display_write_string
 
+    ; Display current drum:motor position
     DisplayCol = 0
     DisplayRow = 1
     gosub display_set_cursor
-    ARRAYWRITE DisplayString, [ hex2 drum_position, ":", hex2 motor_position, 0]
+    ARRAYWRITE DisplayString, [ "Current ", hex2 drum_position, ":", hex2 motor_position, 0]
     gosub display_write_string
-    ARRAYWRITE DisplayString, [ "->", hex2 drum_offset[selector_switch], ":", hex2 motor_offset[selector_switch], 0]
+
+    ; Display desired drum:motor position selected by the switches
+    DisplayCol = 0
+    DisplayRow = 2
+    gosub display_set_cursor
+    ARRAYWRITE DisplayString, [ "Desired ", hex2 drum_offset[selector_switch], ":", hex2 motor_offset[selector_switch], 0]
     gosub display_write_string
 
     return
+#endif
 
 ;=============================================================================
 init:
@@ -348,9 +359,12 @@ init:
     do
     loop until PORTC.3 = 1 
 
+    last_pricing_switches = $ffff ; forces update of pricing_lights
     PORTB = RD_WR_L
 
+#ifdef DO_DISPLAY
     gosub display_initialize
+#endif
 
     gosub selector_lights_off
 
@@ -384,7 +398,9 @@ init:
     next drum_index
 
 ;=============================================================================
+#ifdef DO_DISPLAY
 display_update_needed = 1
+#endif
 gosub read_all_switches
 mainloop:
     if (lid_open) then
@@ -417,22 +433,26 @@ mainloop:
                     ee_byte = drum_position
                     gosub eeprom_write_byte
                     ee_address = ee_address + 1
-                    ee_byte = motor_position
+                    gosub read_motor_position
                     if (register_7 & R7_DRUM_DOWN) then
                         ; last move was down, adjust for gear slop
-                        motor_position = (motor_position + GEAR_SLOP) & $7f
+                        motor_position = (motor_position - GEAR_SLOP) & $7f
                     endif
+                    ee_byte = motor_position
                     gosub eeprom_write_byte
 
                     drum_offset[selector_switch] = drum_position
+                    motor_offset[selector_switch] = motor_position
 
                     gosub program_led_off
                 endif
             endif
             gosub read_all_switches
+#ifdef DO_DISPLAY
             if display_update_needed then
                 gosub display_update
             endif
+#endif
         loop until lid_open = 0
     endif
     ; lid closed
@@ -458,9 +478,11 @@ mainloop:
             endif
         endif
         gosub read_all_switches
+#ifdef DO_DISPLAY
         if display_update_needed then
             gosub display_update
         endif
+#endif
     loop until lid_open
     goto mainloop
 
@@ -481,7 +503,7 @@ ramp_drum_motor_up:
     endif
 
     ;start ramp_up of motor
-    for dac_value = DAC_MOTOR_SLOW to DAC_MOTOR_FAST step -1
+    for dac_value = DAC_MOTOR_SLOW to DAC_MOTOR_FAST step -4
         gosub write_dac
         if dac_value != DAC_MOTOR_FAST then
             pause 8
@@ -490,11 +512,8 @@ ramp_drum_motor_up:
     return
 
 ;=============================================================================
-count_stop_val  var byte
 
 ramp_drum_motor_down:
-    dac_value = DAC_MOTOR_FAST
-ramp_down_loop:
     if dac_value < DAC_MOTOR_SLOW then
         dac_value = dac_value + DAC_MOTOR_DOWN_STEP
         gosub write_dac
@@ -502,27 +521,23 @@ ramp_down_loop:
             gosub start_8_millisecond_timer
         endif
     endif
-    count_stop_val = 0
     do
         gosub read_motor_position
         if (register_7 & R7_DRUM_DOWN) then
-            temp_math = ((motor_position + GEAR_SLOP) & $7f) - motor_offset[drum_index]
+            temp_math = motor_position - ((motor_offset[drum_index] + GEAR_SLOP) & $7f)
         else
             temp_math = motor_position - motor_offset[drum_index]
         endif
         if (temp_math & $80) then
             temp_math = ~temp_math + 1
         endif
-        if (temp_math < 20) then
-            count_stop_val = count_stop_val + 1
-            if count_stop_val = 2 then 
-                gosub stop_timer
-                goto drum_stop
-            endif
+        if (temp_math < 2) then
+            gosub stop_timer
+            goto drum_stop
         endif
     loop until PIR0.5 ; until timer expires (timer may not be running if going slow)
     gosub stop_timer
-    goto ramp_down_loop
+    goto ramp_drum_motor_down
 
 ;=============================================================================
 start_8_millisecond_timer:
@@ -543,7 +558,12 @@ drum_stop:
     dac_value = DAC_MOTOR_STOP
     gosub write_dac
     gosub disable_drum
+    gosub read_motor_position
+    gosub read_drum_position
+#ifdef DO_DISPLAY
     display_update_needed = 1
+#endif
+    drum_moving = 0
     return
 
 ;=============================================================================
@@ -561,9 +581,7 @@ write_dac:                          ;receives data in dac_value
     gosub write_register
     pauseus 16 * 5 ; wait 5 microseconds per bit
 
-    if dac_value = DAC_MOTOR_STOP then
-        drum_moving = 0
-    else
+    if dac_value != DAC_MOTOR_STOP then
         drum_moving = 1
     endif
     return
@@ -575,21 +593,6 @@ read_register:
     pauseus 1 ;give some extra time for data to be valid
     register_data = PORTA
     PORTB = register_address
-
-#ifdef DEBUG_PORTS
-    DisplayRow = 2
-    DisplayCol = register_address * 3
-    while DisplayCol >= 21
-        DisplayRow = DisplayRow + 1
-        DisplayCol = DisplayCol - 21
-    wend
-    if DisplayRow < 4 then
-        gosub display_set_cursor
-        ARRAYWRITE DisplayString, [ hex2 register_data, 0]
-        gosub display_write_string
-    endif
-#endif
-
     return
 
 ;=============================================================================
@@ -610,7 +613,6 @@ read_drum_position:
 previous_value          var byte ;for debounce of selector switches
 last_reg2_value         var byte
 last_up_down_switch     var byte
-last_pricing_switches   var word
 
 read_all_switches:
     register_address = 2
@@ -623,7 +625,9 @@ read_all_switches:
 
     if register_data != last_reg2_value then
         last_reg2_value = register_data
+#ifdef DO_DISPLAY
         display_update_needed = 1
+#endif
         if     (register_data & R2_SELECT_SW_1) = 0 then
             ;position switch 1_2 is closed
             selector_switch = 0
@@ -673,23 +677,24 @@ read_all_switches:
     if last_pricing_switches != pricing_switches then
         last_pricing_switches = pricing_switches
         for drum_index = 0 to (NUM_DRUM_POSITIONS-1)
-            if     (pricing_switches & (3 << (drum_index * 2)) = 0) then
+            if     (((pricing_switches >> (drum_index * 2)) & 3) = 0) then
                 pricing_lights[drum_index] = R7_TOP_10 + R7_BOTTOM_10
-            elseif (pricing_switches & (3 << (drum_index * 2)) = 1) then
+            elseif (((pricing_switches >> (drum_index * 2)) & 3) = 1) then
                 pricing_lights[drum_index] = R7_TOP_15 + R7_BOTTOM_10
-            elseif (pricing_switches & (3 << (drum_index * 2)) = 2) then
+            elseif (((pricing_switches >> (drum_index * 2)) & 3) = 2) then
                 pricing_lights[drum_index] = R7_TOP_10 + R7_BOTTOM_15
             else
                 pricing_lights[drum_index] = R7_TOP_15 + R7_BOTTOM_15
             endif
         next drum_index
-
-        display_update_needed = 1
+        gosub write_pricing_lights_based_on_selector_switch
     endif
 
     if last_up_down_switch != up_down_switch then
         last_up_down_switch = up_down_switch
+#ifdef DO_DISPLAY
         display_update_needed = 1
+#endif
     endif
 
     return
