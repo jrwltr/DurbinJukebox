@@ -335,7 +335,9 @@ display_update:
     DisplayCol = 0
     DisplayRow = 1
     gosub display_set_cursor
-    ARRAYWRITE DisplayString, [ "D ", dec drum_position, " M ", dec motor_position, 0]
+    ARRAYWRITE DisplayString, [ hex2 drum_position, ":", hex2 motor_position, 0]
+    gosub display_write_string
+    ARRAYWRITE DisplayString, [ "->", hex2 drum_offset[selector_switch], ":", hex2 motor_offset[selector_switch], 0]
     gosub display_write_string
 
     return
@@ -383,51 +385,58 @@ init:
 
 ;=============================================================================
 display_update_needed = 1
+gosub read_all_switches
 mainloop:
-    gosub read_all_switches
-
     if (lid_open) then
-        ; lid open
-        ; up/down step switches work to position drum
-        ; program switch works to update position offset values in EEPROM
-        if up_down_switch = UPDWN_UP then
-            gosub enable_drum_up
-            dac_value = DAC_MOTOR_SLOW
-            gosub write_dac
-        elseif up_down_switch = UPDWN_DWN then
-            gosub enable_drum_down
-            dac_value = DAC_MOTOR_SLOW
-            gosub write_dac
-        else
-            if drum_moving then gosub drum_stop
+        if drum_moving then gosub drum_stop
+        do
+            ; lid open
+            ; up/down step switches work to position drum
+            ; program switch works to update position offset values in EEPROM
+            if up_down_switch = UPDWN_UP then
+                gosub enable_drum_up
+                dac_value = DAC_MOTOR_SLOW
+                gosub write_dac
+            elseif up_down_switch = UPDWN_DWN then
+                gosub enable_drum_down
+                dac_value = DAC_MOTOR_SLOW
+                gosub write_dac
+            else
+                if drum_moving then gosub drum_stop
 
-            if (program_mode) = 0 then
-                program_switch = 1
-                gosub program_led_on
-            elseif program_switch != 0 then
-                ; program switch was pressed and now is released
-                program_switch = 0
+                if (program_mode) = 0 then
+                    program_switch = 1
+                    gosub program_led_on
+                elseif program_switch != 0 then
+                    ; program switch was pressed and now is released
+                    program_switch = 0
 
-                ;write drum position to EEPROM
-                gosub read_drum_position
-                ee_address = selector_switch * 2
-                ee_byte = drum_position
-                gosub eeprom_write_byte
-                ee_address = ee_address + 1
-                ee_byte = motor_position
-                if (register_7 & R7_DRUM_DOWN) then
-                    ; last move was down, adjust for gear slop
-                    motor_position = (motor_position + GEAR_SLOP) & $7f
+                    ;write drum position to EEPROM
+                    gosub read_drum_position
+                    ee_address = selector_switch * 2
+                    ee_byte = drum_position
+                    gosub eeprom_write_byte
+                    ee_address = ee_address + 1
+                    ee_byte = motor_position
+                    if (register_7 & R7_DRUM_DOWN) then
+                        ; last move was down, adjust for gear slop
+                        motor_position = (motor_position + GEAR_SLOP) & $7f
+                    endif
+                    gosub eeprom_write_byte
+
+                    drum_offset[selector_switch] = drum_position
+
+                    gosub program_led_off
                 endif
-                gosub eeprom_write_byte
-
-                drum_offset[selector_switch] = drum_position
-
-                gosub program_led_off
             endif
-        endif
-    else
-        ; lid closed
+            gosub read_all_switches
+            if display_update_needed then
+                gosub display_update
+            endif
+        loop until lid_open = 0
+    endif
+    ; lid closed
+    do
         gosub read_drum_position
         for drum_index = 0 to (NUM_DRUM_POSITIONS-1)
             ; temp_math = absolute_value(drum_position-drum_offset[drum_index])
@@ -448,10 +457,11 @@ mainloop:
                 gosub ramp_drum_motor_up
             endif
         endif
-    endif
-    if display_update_needed then
-        gosub display_update
-    endif
+        gosub read_all_switches
+        if display_update_needed then
+            gosub display_update
+        endif
+    loop until lid_open
     goto mainloop
 
 ;=============================================================================
