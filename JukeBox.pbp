@@ -302,7 +302,7 @@ display_update_needed   var     byte
 display_update:
     display_update_needed = 0
 
-    gosub display_clear
+;???    gosub display_clear
 
     DisplayRow = 0
     DisplayCol = 0
@@ -513,6 +513,7 @@ build_drum_index_map:
     for xx = 0 to (DRUM_MAP_SIZE-1)
         if (drum_index_map[xx] = NUM_DRUM_POSITIONS) then
             yy var byte
+            yy = xx
             do
                 yy = (yy + 1) & (DRUM_MAP_SIZE-1)
             loop until drum_index_map[yy] != NUM_DRUM_POSITIONS
@@ -553,8 +554,11 @@ move_drum:
             gosub write_dac
             gosub start_8_millisecond_timer
         endif
+
+        gosub compute_drum_index
+        gosub write_selector_light_from_drum_index
+
         if ((dac_value = DAC_MOTOR_FAST) and PIR0.5) then
-            gosub compute_drum_index
             if last_value != drum_position then
                 no_change_count = 0
                 last_value = drum_position
@@ -569,12 +573,11 @@ move_drum:
             endif
             gosub start_8_millisecond_timer
         endif
-        gosub write_selector_light_from_drum_index
         temp_math = drum_offset[selector_switch] - drum_position
         if (temp_math & $80) then
             temp_math = ~temp_math + 1
         endif
-    loop until temp_math < 12
+    loop until temp_math < 10
     gosub stop_timer
 
     ;ramp down and stop when we hit the target
@@ -588,6 +591,7 @@ move_drum:
             gosub write_dac
             gosub start_8_millisecond_timer
         endif
+
         gosub read_motor_position
         if ((dac_value = DAC_MOTOR_SLOW) and PIR0.5) then
             if last_value != motor_position then
