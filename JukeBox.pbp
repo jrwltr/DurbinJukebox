@@ -299,10 +299,17 @@ INCLUDE "EEPROM.pbp"
 #ifdef DO_DISPLAY
 display_update_needed   var     byte
 
+#ifdef DO_DEBUG
+        RampUpOffset    var byte
+        RampUpPosition  var byte
+        RampDownOffset    var byte
+        RampDownPosition  var byte
+#endif
+
 display_update:
     display_update_needed = 0
 
-;???    gosub display_clear
+    gosub display_clear
 
     DisplayRow = 0
     DisplayCol = 0
@@ -353,14 +360,25 @@ display_update:
     ARRAYWRITE DisplayString, [ "Desired ", hex2 drum_offset[selector_switch], ":", hex2 motor_offset[selector_switch], 0]
     gosub display_write_string
 
+#ifdef DO_DEBUG
+    DisplayCol = 0
+    DisplayRow = 3
+    gosub display_set_cursor
+    ARRAYWRITE DisplayString, [ hex2 RampUpOffset, ":", hex2 RampUpPosition, 0]
+    gosub display_write_string
+    ARRAYWRITE DisplayString, [ " ", hex2 RampDownOffset, ":", hex2 RampDownPosition, 0]
+    gosub display_write_string
+#endif
     return
 #endif
 
 ;=============================================================================
 init:
-    ; wait for board reset to complete
+    ; wait for jukebox reset to complete
     do
     loop until PORTC.3 = 1 
+
+    pause 500
 
     last_pricing_switches = $ffff ; forces update of pricing_lights
     PORTB = RD_WR_L
@@ -573,6 +591,10 @@ move_drum:
             endif
             gosub start_8_millisecond_timer
         endif
+#ifdef DO_DEBUG
+        RampUpOffset = drum_offset[selector_switch]
+        RampUpPosition = drum_position
+#endif
         temp_math = drum_offset[selector_switch] - drum_position
         if (temp_math & $80) then
             temp_math = ~temp_math + 1
@@ -608,6 +630,10 @@ move_drum:
             endif
             gosub start_8_millisecond_timer
         endif
+#ifdef DO_DEBUG
+        RampDownOffset = motor_offset[selector_switch]
+        RampDownPosition = motor_position
+#endif
         if (register_7 & R7_DRUM_DOWN) then
             temp_math = motor_position - ((motor_offset[selector_switch] + GEAR_SLOP) & $7f)
         else
@@ -624,6 +650,7 @@ move_drum:
 ;=============================================================================
 start_8_millisecond_timer:
     ; initialize timer 0 for 8 milliseconds and start it
+    T0CON0 = $00 ; T0CON0.T0EN = 0  disable timer
     TMR0H = $ff  ; timer 0 8 bit comparator value
     TMR0L = 0    ; timer 0 counter starts at zero
     T0CON1 = $6a ; T0CON1.TOCS<2:0>=HFINTOSC, T0CON1.T0ASYNC=0, T0CON1.T0CKPS<3:0>=$a (1:1024 prescaler)
@@ -683,6 +710,13 @@ read_motor_position:
     register_address = 0
     gosub read_register
     motor_position = register_data
+    do
+        gosub read_register
+        if register_data = motor_position then
+            exit
+        endif
+        motor_position = register_data
+    loop until 0
     return
 
 ;=============================================================================
@@ -713,7 +747,7 @@ read_all_switches:
             else
                 debounce_counter = debounce_counter + 1
             endif
-        loop until debounce_counter = 50
+        loop until debounce_counter = 200
     endif
 
     if register_data != last_reg2_value then
