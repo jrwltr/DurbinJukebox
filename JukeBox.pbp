@@ -302,8 +302,10 @@ display_update_needed   var     byte
 #ifdef DO_DEBUG
         RampUpOffset    var byte
         RampUpPosition  var byte
+        RampUpSpeed     var byte
         RampDownOffset    var byte
         RampDownPosition  var byte
+        RampDownSpeed     var byte
 #endif
 
 display_update:
@@ -367,6 +369,8 @@ display_update:
     ARRAYWRITE DisplayString, [ hex2 RampUpOffset, ":", hex2 RampUpPosition, 0]
     gosub display_write_string
     ARRAYWRITE DisplayString, [ " ", hex2 RampDownOffset, ":", hex2 RampDownPosition, 0]
+    gosub display_write_string
+    ARRAYWRITE DisplayString, [ " ", hex2 RampUpSpeed, ":", hex2 RampDownSpeed, 0]
     gosub display_write_string
 #endif
     return
@@ -594,6 +598,7 @@ move_drum:
 #ifdef DO_DEBUG
         RampUpOffset = drum_offset[selector_switch]
         RampUpPosition = drum_position
+        RampUpSpeed = dac_value
 #endif
         temp_math = drum_offset[selector_switch] - drum_position
         if (temp_math & $80) then
@@ -633,6 +638,7 @@ move_drum:
 #ifdef DO_DEBUG
         RampDownOffset = motor_offset[selector_switch]
         RampDownPosition = motor_position
+        RampDownSpeed  = dac_value
 #endif
         if (register_7 & R7_DRUM_DOWN) then
             temp_math = motor_position - ((motor_offset[selector_switch] + GEAR_SLOP) & $7f)
