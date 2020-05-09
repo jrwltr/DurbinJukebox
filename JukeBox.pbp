@@ -299,6 +299,7 @@ INCLUDE "EEPROM.pbp"
 #ifdef DO_DISPLAY
 display_update_needed   var     byte
 
+#define DO_DEBUG
 #ifdef DO_DEBUG
         RampUpOffset    var byte
         RampUpPosition  var byte
@@ -719,18 +720,23 @@ read_motor_position:
     do
         gosub read_register
         if register_data = motor_position then
-            exit
+            return
         endif
         motor_position = register_data
     loop until 0
-    return
 
 ;=============================================================================
 read_drum_position:
     register_address = 1
     gosub read_register
     drum_position = register_data
-    return
+    do
+        gosub read_register
+        if register_data = drum_position then
+            return
+        endif
+        drum_position = register_data
+    loop until 0
 
 ;=============================================================================
 previous_value          var byte ;for debounce of selector switches
